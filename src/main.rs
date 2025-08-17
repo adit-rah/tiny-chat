@@ -1,12 +1,20 @@
+use clap::Parser;
+
 mod server;
+
+#[derive(Parser)]
+struct Args {
+    #[arg(short, long, default_value_t = 6001)]
+    port: u16,
+
+    #[arg(short, long)]
+    password: Option<String>,
+}
 
 #[tokio::main]
 async fn main() {
-    println!("Starting chat servers...");
+    let args = Args::parse();
 
-    // Start WebSocket server
-    tokio::spawn(server::ws_server::start_ws_server());
-
-    // Start TCP server (CLI clients)
-    server::server::start_tcp_server().await;
+    println!("Starting chat server...");
+    server::ws_server::start_ws_server(args.port, args.password).await;
 }

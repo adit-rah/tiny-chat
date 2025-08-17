@@ -1,4 +1,2 @@
-pub mod client;
-pub mod broadcast;
-pub mod logger;
-pub mod server;
+pub mod ws_server;
+pub mod chat;

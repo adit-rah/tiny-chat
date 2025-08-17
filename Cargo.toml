@@ -5,9 +5,13 @@ edition = "2021"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
-tokio-tungstenite = "0.20"
+tokio-tungstenite = { version = "0.20.1", features = ["__rustls-tls"] }
+tungstenite = { version = "0.20.1", features = ["__rustls-tls"] }
+tokio-rustls = "0.25"
+rustls = "0.21"
 futures = "0.3"
-colored = "2.0"
+clap = { version = "4.1", features = ["derive"] }
+anyhow = "1.0"
 
 [[bin]]
 name = "server"
