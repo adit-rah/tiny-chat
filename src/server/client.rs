@@ -38,32 +38,47 @@ pub async fn handle_client(
 
     loop {
         line.clear();
-        let bytes_read = reader.read_line(&mut line).await.unwrap();
-        if bytes_read == 0 {
-            break;
-        }
-        let message = line.trim();
+        
+        // byte error handling (skips invalid utf)
+        let bytes_read = reader.read_line(&mut line).await;
 
-        if message.starts_with('/') {
-            match message {
-                "/list" => {
-                    let clients_guard = clients.lock().await;
-                    let client = clients_guard.get(&nickname).unwrap().clone();
-                    let mut client = client.lock().await;
-                    let names: Vec<&String> = clients_guard.keys().collect();
-                    client.write_all(format!("Connected users: {:?}\n", names).as_bytes()).await.unwrap();
-                }
-                _ => {
-                    let clients_guard = clients.lock().await;
-                    let client = clients_guard.get(&nickname).unwrap().clone();
-                    let mut client = client.lock().await;
-                    client.write_all(b"Unknown command\n").await.unwrap();
+        match bytes_read {
+            Ok(0) => break, // connection closed
+            Ok(_) => {
+                // skip invalid UTF-8
+                if let Ok(message) = std::str::from_utf8(line.as_bytes()) {
+                    let message = message.trim();
+
+                    if message.starts_with('/') {
+                        match message {
+                            "/list" => {
+                                let clients_guard = clients.lock().await;
+                                let client = clients_guard.get(&nickname).unwrap().clone();
+                                let mut client = client.lock().await;
+                                let names: Vec<&String> = clients_guard.keys().collect();
+                                client.write_all(format!("Connected users: {:?}\n", names).as_bytes()).await.unwrap();
+                            }
+                            _ => {
+                                let clients_guard = clients.lock().await;
+                                let client = clients_guard.get(&nickname).unwrap().clone();
+                                let mut client = client.lock().await;
+                                client.write_all(b"Unknown command\n").await.unwrap();
+                            }
+                        }
+                    } else {
+                        let formatted = format!("{}: {}", nickname.blue(), message);
+                        println!("{}", formatted);
+                        broadcast(&clients, &log_file, &formatted, Some(&nickname)).await;
+                    }
+                } else {
+                    eprintln!("Received invalid UTF-8 from {}", nickname);
+                    continue;
                 }
             }
-        } else {
-            let formatted = format!("{}: {}", nickname.blue(), message);
-            println!("{}", formatted);
-            broadcast(&clients, &log_file, &formatted, Some(&nickname)).await;
+            Err(e) => {
+                eprintln!("Error reading from {}: {}", nickname, e);
+                break;
+            }
         }
     }
 
