@@ -10,14 +10,22 @@ use crate::server::server::Clients;
 pub async fn handle_client(
     stream: TcpStream,
     clients: Clients,
-    log_file: Arc<Mutex<tokio::fs::File>>
+    log_file: Arc<Mutex<tokio::fs::File>>,
 ) {
+    // split stream into read and write halves
     let (reader_half, writer_half) = stream.into_split();
-    let writer_half = Arc::new(Mutex::new(writer_half)); // store write half
+    let writer_half = Arc::new(Mutex::new(writer_half));
     let mut reader = BufReader::new(reader_half);
     let mut line = String::new();
 
-    // Ask for nickname
+    // helper to write to client
+    async fn write_to_client(client: Arc<Mutex<tokio::net::tcp::OwnedWriteHalf>>, msg: &str) {
+        let mut locked = client.lock().await;
+        let _ = locked.write_all(msg.as_bytes()).await;
+        let _ = locked.write_all(b"\n").await;
+    }
+
+    // ask for nickname
     {
         let mut writer = writer_half.lock().await;
         writer.write_all(b"Enter your nickname:\n").await.unwrap();
@@ -27,6 +35,7 @@ pub async fn handle_client(
     let nickname = line.trim().to_string();
     line.clear();
 
+    // register client
     {
         let mut clients_guard = clients.lock().await;
         clients_guard.insert(nickname.clone(), writer_half.clone());
@@ -36,43 +45,44 @@ pub async fn handle_client(
     println!("{}", join_msg.green());
     broadcast(&clients, &log_file, &join_msg, Some(&nickname)).await;
 
+    // main message loop
     loop {
         line.clear();
-        
-        // byte error handling (skips invalid utf)
         let bytes_read = reader.read_line(&mut line).await;
 
         match bytes_read {
             Ok(0) => break, // connection closed
             Ok(_) => {
-                // skip invalid UTF-8
-                if let Ok(message) = std::str::from_utf8(line.as_bytes()) {
-                    let message = message.trim();
+                let message = match std::str::from_utf8(line.as_bytes()) {
+                    Ok(m) => m.trim(),
+                    Err(_) => {
+                        eprintln!("Received invalid UTF-8 from {}", nickname);
+                        continue;
+                    }
+                };
 
-                    if message.starts_with('/') {
-                        match message {
-                            "/list" => {
-                                let clients_guard = clients.lock().await;
-                                let client = clients_guard.get(&nickname).unwrap().clone();
-                                let mut client = client.lock().await;
+                if message.starts_with('/') {
+                    // Handle commands
+                    match message {
+                        "/list" => {
+                            let clients_guard = clients.lock().await;
+                            if let Some(client) = clients_guard.get(&nickname) {
                                 let names: Vec<&String> = clients_guard.keys().collect();
-                                client.write_all(format!("Connected users: {:?}\n", names).as_bytes()).await.unwrap();
-                            }
-                            _ => {
-                                let clients_guard = clients.lock().await;
-                                let client = clients_guard.get(&nickname).unwrap().clone();
-                                let mut client = client.lock().await;
-                                client.write_all(b"Unknown command\n").await.unwrap();
+                                write_to_client(client.clone(), &format!("Connected users: {:?}\n", names)).await;
                             }
                         }
-                    } else {
-                        let formatted = format!("{}: {}", nickname.blue(), message);
-                        println!("{}", formatted);
-                        broadcast(&clients, &log_file, &formatted, Some(&nickname)).await;
+                        _ => {
+                            let clients_guard = clients.lock().await;
+                            if let Some(client) = clients_guard.get(&nickname) {
+                                write_to_client(client.clone(), "Unknown command").await;
+                            }
+                        }
                     }
                 } else {
-                    eprintln!("Received invalid UTF-8 from {}", nickname);
-                    continue;
+                    // Broadcast normal message
+                    let formatted = format!("{}: {}", nickname.blue(), message);
+                    println!("{}", formatted);
+                    broadcast(&clients, &log_file, &formatted, Some(&nickname)).await;
                 }
             }
             Err(e) => {
@@ -82,6 +92,7 @@ pub async fn handle_client(
         }
     }
 
+    // client disconnected
     let leave_msg = format!("{} has left!", nickname);
     println!("{}", leave_msg.red());
     broadcast(&clients, &log_file, &leave_msg, Some(&nickname)).await;
