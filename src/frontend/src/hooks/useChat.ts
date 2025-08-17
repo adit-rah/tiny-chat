@@ -1,37 +1,46 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 
-export function useChat(url: string) {
+interface Message {
+  sender: string;
+  content: string;
+}
+
+export function useChat(serverUrl: string, password?: string) {
+  const [messages, setMessages] = useState<Message[]>([]);
   const ws = useRef<WebSocket | null>(null);
-  const [messages, setMessages] = useState<string[]>([]);
-  const [connected, setConnected] = useState(false);
 
-  const sendMessage = (msg: string) => {
-    if (ws.current && ws.current.readyState === WebSocket.OPEN) {
-      ws.current.send(msg);
-    }
-  };
-
-  const connect = () => {
-    ws.current = new WebSocket(url);
+  useEffect(() => {
+    const url = new URL(serverUrl);
+    ws.current = new WebSocket(url.toString());
 
     ws.current.onopen = () => {
-      setConnected(true);
-      console.log("Connected to chat server");
+      console.log("Connected to server");
+      if (password) ws.current?.send(JSON.stringify({ type: "auth", password }));
     };
 
     ws.current.onmessage = (event) => {
-      setMessages((prev) => [...prev, event.data]);
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type === "message") {
+          setMessages((prev) => [...prev, { sender: data.sender, content: data.content }]);
+        }
+      } catch (err) {
+        console.error("Invalid message format", err);
+      }
     };
 
     ws.current.onclose = () => {
-      setConnected(false);
-      console.log("Disconnected from chat server");
+      console.log("Disconnected from server");
     };
 
-    ws.current.onerror = (err) => {
-      console.error("WebSocket error:", err);
+    return () => {
+      ws.current?.close();
     };
+  }, [serverUrl, password]);
+
+  const sendMessage = (content: string) => {
+    ws.current?.send(JSON.stringify({ type: "message", content }));
   };
 
-  return { messages, connected, connect, sendMessage };
+  return { messages, sendMessage };
 }
