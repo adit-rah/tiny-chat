@@ -1,31 +1,35 @@
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 
-interface Message {
-  sender: string;
+export interface ChatMessage {
+  type: "message" | "system";
+  sender?: string;
   content: string;
 }
 
-export function useChat(serverUrl: string, password?: string) {
-  const [messages, setMessages] = useState<Message[]>([]);
+export function useChat(serverUrl: string) {
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const ws = useRef<WebSocket | null>(null);
 
+  // Establish WebSocket connection
   useEffect(() => {
-    const url = new URL(serverUrl);
-    ws.current = new WebSocket(url.toString());
+    ws.current = new WebSocket(serverUrl);
 
     ws.current.onopen = () => {
       console.log("Connected to server");
-      if (password) ws.current?.send(JSON.stringify({ type: "auth", password }));
     };
 
     ws.current.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
-        if (data.type === "message") {
-          setMessages((prev) => [...prev, { sender: data.sender, content: data.content }]);
+
+        // Only add recognized types
+        if (data.type === "message" || data.type === "system") {
+          setMessages((prev) => [...prev, data]);
+        } else {
+          console.warn("Unknown message type:", data);
         }
       } catch (err) {
-        console.error("Invalid message format", err);
+        console.error("Invalid message format", err, "Raw data:", event.data);
       }
     };
 
@@ -33,14 +37,20 @@ export function useChat(serverUrl: string, password?: string) {
       console.log("Disconnected from server");
     };
 
-    return () => {
-      ws.current?.close();
-    };
-  }, [serverUrl, password]);
+    return () => ws.current?.close();
+  }, [serverUrl]);
 
-  const sendMessage = (content: string) => {
-    ws.current?.send(JSON.stringify({ type: "message", content }));
-  };
+  // Send chat message
+  const sendMessage = useCallback((content: string) => {
+    if (!ws.current || ws.current.readyState !== WebSocket.OPEN) return;
+    ws.current.send(JSON.stringify({ type: "message", content }));
+  }, []);
 
-  return { messages, sendMessage };
+  // Send nickname once
+  const sendNickname = useCallback((nickname: string) => {
+    if (!ws.current || ws.current.readyState !== WebSocket.OPEN) return;
+    ws.current.send(JSON.stringify({ type: "nickname", name: nickname }));
+  }, []);
+
+  return { messages, sendMessage, sendNickname };
 }

@@ -1,111 +1,123 @@
-use crate::server::chat::{Clients, broadcast};
-use tokio::net::TcpListener;
-use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::accept_async;
 use std::sync::Arc;
+use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
-use futures::{SinkExt, StreamExt};
+use tokio_tungstenite::accept_async;
+use tokio_tungstenite::tungstenite::Message;
+use futures::{StreamExt, SinkExt};
+use crate::server::chat::{Clients, broadcast};
 use std::collections::HashMap;
+use serde_json::json;
+use serde_json::Value;
 
-pub async fn start_ws_server(port: u16, password: Option<String>) {
-    let addr = format!("0.0.0.0:{}", port);
-    let listener = TcpListener::bind(&addr).await.expect("Failed to bind");
-
+pub async fn start_server(addr: &str) {
+    let listener = TcpListener::bind(addr).await.unwrap();
     println!("WebSocket server listening on ws://{}", addr);
 
     let clients: Clients = Arc::new(Mutex::new(HashMap::new()));
 
     while let Ok((stream, _)) = listener.accept().await {
-        let clients = Arc::clone(&clients);
-        let password = password.clone();
-
+        let clients_clone = clients.clone();
         tokio::spawn(async move {
-            if let Err(e) = handle_connection(stream, clients, password).await {
+            if let Err(e) = handle_connection(stream, clients_clone).await {
                 eprintln!("Connection error: {}", e);
             }
         });
     }
 }
 
-async fn handle_connection(stream: tokio::net::TcpStream, clients: Clients, password: Option<String>) -> anyhow::Result<()> {
-    let ws_stream = accept_async(stream).await?;
-    let ws = Arc::new(Mutex::new(ws_stream));
+async fn handle_connection(stream: TcpStream, clients: Clients) -> anyhow::Result<()> {
+    let peer = stream.peer_addr()?;
+    println!("Incoming TCP connection from {}", peer);
 
-    // Prompt for nickname
-    let nickname = {
-        let mut ws_guard = ws.lock().await;
-        ws_guard.send(Message::Text("Enter your nickname:".to_string())).await?;
-
-        let msg = ws_guard.next().await
-            .ok_or_else(|| anyhow::anyhow!("Client disconnected"))??;
-
-        match msg {
-            Message::Text(txt) => txt.trim().to_string(),
-            _ => "Anonymous".to_string(),
+    let ws_stream = match accept_async(stream).await {
+        Ok(ws) => {
+            println!("WebSocket handshake succeeded with {}", peer);
+            ws
+        }
+        Err(err) => {
+            eprintln!("WebSocket handshake failed with {}: {}", peer, err);
+            return Err(err.into());
         }
     };
 
-    // Optional password auth
-    if let Some(ref pw) = password {
-        let mut ws_guard = ws.lock().await;
-        ws_guard.send(Message::Text("Enter server password:".to_string())).await?;
+    // Split WebSocket into sender and receiver
+    let (ws_sender, mut ws_receiver) = ws_stream.split();
+    let ws_sender = Arc::new(Mutex::new(ws_sender));
 
-        let auth_msg = ws_guard.next().await
-            .ok_or_else(|| anyhow::anyhow!("Client disconnected"))??;
-
-        let client_pw = match auth_msg {
-            Message::Text(txt) => txt,
-            _ => "".to_string(),
-        };
-
-        if client_pw != *pw {
-            ws_guard.send(Message::Text("Invalid password. Disconnecting.".to_string())).await?;
-            return Ok(());
-        }
+    // Send system message for nickname prompt
+    {
+        let msg = json!({
+            "type": "system",
+            "content": "Enter your nickname:"
+        });
+        ws_sender.lock().await.send(Message::Text(msg.to_string())).await?;
     }
 
-    // Register client
-    clients.lock().await.insert(nickname.clone(), Arc::clone(&ws));
-
-    let join_msg = format!("{} has joined!", nickname);
-    println!("{}", join_msg);
-    broadcast(&clients, &join_msg, Some(&nickname)).await;
-
-    // Read messages
-    let clients_clone = Arc::clone(&clients);
-    let nickname_clone = nickname.clone();
-    loop {
-        let msg = {
-            let mut ws_guard = ws.lock().await;
-            ws_guard.next().await
-        };
-
-        let msg = match msg {
-            Some(Ok(Message::Text(txt))) => txt,
-            Some(Ok(Message::Close(_))) | None => break,
-            _ => continue,
-        };
-
-        if msg.starts_with('/') {
-            // Only /list for now
-            if msg.trim() == "/list" {
-                let clients_guard = clients.lock().await;
-                let names: Vec<&String> = clients_guard.keys().collect();
-                let response = format!("Connected users: {:?}", names);
-                let mut ws_guard = ws.lock().await;
-                let _ = ws_guard.send(Message::Text(response)).await;
+    // Read nickname
+    let mut nickname = String::new();
+    if let Some(msg_result) = ws_receiver.next().await {
+        match msg_result {
+            Ok(Message::Text(txt)) => {
+                // parse JSON
+                let data: serde_json::Value = serde_json::from_str(&txt)?;
+                if data["type"] == "nickname" {
+                    nickname = data["name"].as_str().unwrap_or("Unknown").to_string();
+                } else {
+                    eprintln!("Expected nickname message from {}", peer);
+                    return Err(anyhow::anyhow!("Expected nickname message"));
+                }
             }
-        } else {
-            let formatted = format!("{}: {}", nickname_clone, msg);
-            println!("{}", formatted);
-            broadcast(&clients_clone, &formatted, Some(&nickname_clone)).await;
+            _ => return Err(anyhow::anyhow!("Failed to read nickname")),
         }
     }
 
-    clients.lock().await.remove(&nickname_clone);
-    let leave_msg = format!("{} has left!", nickname_clone);
-    println!("{}", leave_msg);
-    broadcast(&clients, &leave_msg, None).await;
+    println!("{} connected as '{}'", peer, nickname);
+
+    // Add client for broadcasting
+    {
+        let mut clients_guard = clients.lock().await;
+        clients_guard.insert(nickname.clone(), ws_sender.clone());
+    }
+
+    broadcast(&clients, "Server", &format!("{} has joined!", nickname)).await;
+
+    // Listen for messages from this client
+    while let Some(msg) = ws_receiver.next().await {
+        match msg {
+            Ok(Message::Text(text)) => {
+                // Parse incoming JSON
+                if let Ok(data) = serde_json::from_str::<Value>(&text) {
+                    if data["type"] == "message" {
+                        let content = data["content"].as_str().unwrap_or("");
+                        println!("Received from {}: {}", nickname, content);
+                        broadcast(&clients, &nickname, content).await;
+                    } else {
+                        println!("Unknown message type from {}: {:?}", nickname, data);
+                    }
+                } else {
+                    println!("Invalid JSON from {}: {}", nickname, text);
+                }
+            }
+            Ok(Message::Close(_)) => {
+                println!("{} disconnected", nickname);
+                break;
+            }
+            Ok(msg) => {
+                println!("Received non-text message from {}: {:?}", nickname, msg);
+            }
+            Err(err) => {
+                eprintln!("Error receiving message from {}: {}", nickname, err);
+                break;
+            }
+        }
+    }
+
+    // Remove client and broadcast leaving
+    {
+        let mut clients_guard = clients.lock().await;
+        clients_guard.remove(&nickname);
+    }
+    broadcast(&clients, "Server", &format!("{} has left!", nickname)).await;
 
     Ok(())
 }

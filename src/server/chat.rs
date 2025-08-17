@@ -1,25 +1,27 @@
-use std::collections::HashMap;
-use std::sync::Arc;
-use tokio::sync::Mutex;
 use tokio_tungstenite::tungstenite::Message;
-use tokio::net::TcpStream;
 use tokio_tungstenite::WebSocketStream;
+use tokio::net::TcpStream;
+use tokio::sync::Mutex;
+use futures::stream::SplitSink;
+use std::sync::Arc;
+use std::collections::HashMap;
+use serde_json::json;
 use futures::SinkExt;
 
-/// Type alias for shared chat clients
-pub type Clients = Arc<Mutex<HashMap<String, Arc<Mutex<WebSocketStream<TcpStream>>>>>>;
+// Clients now store the sender half of the split WebSocket
+pub type Clients = Arc<Mutex<HashMap<String, Arc<Mutex<SplitSink<WebSocketStream<TcpStream>, Message>>>>>>;
 
-/// Broadcast a message to all clients except optionally the sender
-pub async fn broadcast(clients: &Clients, message: &str, sender: Option<&str>) {
+/// Broadcast a message to all connected clients
+pub async fn broadcast(clients: &Clients, sender: &str, message: &str) {
     let clients_guard = clients.lock().await;
+    let msg = json!({
+        "type": "message",
+        "sender": sender,
+        "content": message
+    });
 
-    for (nickname, ws) in clients_guard.iter() {
-        if let Some(s) = sender {
-            if s == nickname {
-                continue;
-            }
-        }
-        let mut ws_guard = ws.lock().await;
-        let _ = ws_guard.send(Message::Text(message.to_string())).await;
+    for (_, client_ws) in clients_guard.iter() {
+        let mut ws_guard = client_ws.lock().await;
+        let _ = ws_guard.send(Message::Text(msg.to_string())).await;
     }
 }
