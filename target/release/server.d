@@ -1,1 +1,0 @@
-/home/ad/documents/projects/tiny-chat/target/release/server: /home/ad/documents/projects/tiny-chat/src/main.rs /home/ad/documents/projects/tiny-chat/src/server/chat.rs /home/ad/documents/projects/tiny-chat/src/server/mod.rs /home/ad/documents/projects/tiny-chat/src/server/ws_server.rs
