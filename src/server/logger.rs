@@ -1,6 +1,5 @@
 use tokio::fs::File;
 use tokio::fs::OpenOptions;
-use tokio::io::AsyncWriteExt;
 
 pub type LogFile = File;
 
