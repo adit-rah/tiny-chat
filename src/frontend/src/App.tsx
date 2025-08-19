@@ -28,7 +28,7 @@ const App: React.FC = () => {
         <div style={{ padding: "24px" }}>
           <Routes>
             <Route path="/" element={<Home />} />
-            <Route path="/chat" element={<Chat serverUrl="ws://localhost:6001" />} />
+            <Route path="/chat" element={<Chat />} />
             <Route path="/host" element={<Host />} />
           </Routes>
         </div>

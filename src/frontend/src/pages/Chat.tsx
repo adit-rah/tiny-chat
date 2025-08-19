@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useRef } from "react";
 import { useChat, ChatMessage } from "../hooks/useChat";
 
-interface ChatProps {
-  serverUrl: string;
-}
+export const Chat: React.FC = () => {
+  const [serverIp, setServerIp] = useState("");
+  const [serverPort, setServerPort] = useState("");
+  const [serverUrl, setServerUrl] = useState<string | null>(null);
 
-export const Chat: React.FC<ChatProps> = ({ serverUrl }) => {
-  const { messages, sendMessage, sendNickname } = useChat(serverUrl);
+  const { messages, sendMessage, sendNickname } = useChat(serverUrl || "");
   const [input, setInput] = useState("");
   const [nickname, setNickname] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
@@ -55,6 +55,37 @@ export const Chat: React.FC<ChatProps> = ({ serverUrl }) => {
       </div>
     );
   };
+
+  if (!serverUrl) {
+    return (
+      <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 8, maxWidth: 300, margin: "0 auto" }}>
+        <input
+          type="text"
+          placeholder="Server IP (e.g. 192.168.1.10)"
+          value={serverIp}
+          onChange={(e) => setServerIp(e.target.value)}
+          style={{ padding: 8, borderRadius: 4, border: "1px solid #ccc" }}
+        />
+        <input
+          type="text"
+          placeholder="Port (e.g. 8080)"
+          value={serverPort}
+          onChange={(e) => setServerPort(e.target.value)}
+          style={{ padding: 8, borderRadius: 4, border: "1px solid #ccc" }}
+        />
+        <button
+          onClick={() => {
+            if (serverIp && serverPort) {
+              setServerUrl(`ws://${serverIp}:${serverPort}`);
+            }
+          }}
+          style={{ padding: 8, borderRadius: 4, backgroundColor: "#007bff", color: "white", border: "none" }}
+        >
+          Connect
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div

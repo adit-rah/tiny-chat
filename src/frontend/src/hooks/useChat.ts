@@ -6,16 +6,18 @@ export interface ChatMessage {
   content: string;
 }
 
-export function useChat(serverUrl: string) {
+export function useChat(serverUrl: string | null) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const ws = useRef<WebSocket | null>(null);
 
   // Establish WebSocket connection
   useEffect(() => {
+    if (!serverUrl) return; // 👈 skip if no serverUrl yet
+
     ws.current = new WebSocket(serverUrl);
 
     ws.current.onopen = () => {
-      console.log("Connected to server");
+      console.log("Connected to server:", serverUrl);
     };
 
     ws.current.onmessage = (event) => {
@@ -34,7 +36,7 @@ export function useChat(serverUrl: string) {
     };
 
     ws.current.onclose = () => {
-      console.log("Disconnected from server");
+      console.log("Disconnected from server:", serverUrl);
     };
 
     return () => ws.current?.close();
